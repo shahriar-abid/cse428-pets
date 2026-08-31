@@ -24,6 +24,11 @@ class AttentionGate(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, g, x):
+        # The gating signal g is coarser than the skip feature x; upsample it to
+        # x's spatial resolution first so the two 1x1 projections can be added.
+        g = F.interpolate(
+            g, size=x.shape[-2:], mode="bilinear", align_corners=False
+        )
         a = self.relu(self.w_g(g) + self.w_x(x))
         return x * self.psi(a)
 
