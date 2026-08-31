@@ -47,7 +47,7 @@ def main():
         f"train={len(ds['train'])}, val={len(ds['val'])}, test={len(ds['test'])}"
     )
     assert len(ds["train"]) + len(ds["val"]) == 3680, "unexpected trainval size"
-    assert len(ds["test"]) == 3666, "unexpected test size"
+    assert len(ds["test"]) == 3669, "unexpected test size"
 
     sample = ds["train"][0]
     img, mask, label = sample["image"], sample["mask"], sample["label"]
