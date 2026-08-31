@@ -75,6 +75,11 @@ class Trainer:
     def __init__(self, model, loaders, device, cfg, out_dir, resume=None):
         self.model = model.to(device)
         self.loaders = loaders
+        self.classes = (
+            list(loaders["train"].dataset.classes)
+            if hasattr(loaders["train"].dataset, "classes")
+            else None
+        )
         self.device = device
         self.cfg = cfg
         self.out_dir = out_dir
@@ -168,6 +173,7 @@ class Trainer:
             "history": self.history,
             "best_miou": self.best_miou,
             "cfg": self.cfg,
+            "classes": self.classes,
         }
 
     def fit(self):
