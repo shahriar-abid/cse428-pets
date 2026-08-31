@@ -1,0 +1,14 @@
+# data & artifacts
+data/
+outputs/
+reports/
+*.pth
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# tooling
+.ipynb_checkpoints/
+.DS_Store

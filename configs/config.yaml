@@ -1,0 +1,22 @@
+seed: 42
+
+data:
+  root: null            # null -> auto: $CSE428_DATA_ROOT, Kaggle input dir, or ./data
+  img_size: 256
+  val_frac: 0.1
+  batch_size: 16
+  num_workers: 2
+  augment: true
+
+model:
+  name: unet            # unet | attention_unet
+  base_channels: 32
+  lambda_cls: 1.0       # weight of the breed-classification loss
+
+train:
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  epochs_total: 60      # extended between checkpoint chunks, never reset
+
+output:
+  dir: outputs          # /kaggle/working/outputs on Kaggle
