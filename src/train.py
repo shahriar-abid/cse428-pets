@@ -43,9 +43,11 @@ def find_resume_checkpoint(explicit=None, out_dir=None, model_name=None):
         candidates.append(explicit)
     if os.path.isdir("/kaggle/input"):
         candidates += sorted(
-            glob.glob("/kaggle/input/*/outputs/*/checkpoints/last.pth")
+            glob.glob("/kaggle/input/**/checkpoints/last.pth", recursive=True)
         )
-        candidates += sorted(glob.glob("/kaggle/input/*/checkpoints/last.pth"))
+        candidates += sorted(
+            glob.glob("/kaggle/input/**/outputs/*/checkpoints/last.pth", recursive=True)
+        )
     for path in candidates:
         if not os.path.exists(path):
             continue

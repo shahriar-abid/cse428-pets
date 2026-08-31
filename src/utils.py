@@ -28,13 +28,21 @@ def on_kaggle() -> bool:
     return os.environ.get("KAGGLE_KERNEL_RUN_TYPE") is not None or os.path.isdir("/kaggle")
 
 
+KAGGLE_REPO_DIR = "/kaggle/working/cse428-pets"
+
+
 def resolve_output_dir(rel_dir: str) -> str:
-    """Outputs must land inside /kaggle/working for the notebook output
-    bucket to persist them (files written inside a git-cloned repo under
-    /kaggle/working/<repo>/ are NOT captured, breaking checkpoint resume).
-    Returns '/'kaggle/working/outputs' on Kaggle, else the local rel path."""
+    """Return where checkpoints/reports should be written so Kaggle persists them
+    into the notebook output bucket.
+
+    Kaggle's output capture is scoped to the git-clone snapshot
+    (/kaggle/working/<repo>) plus whatever a session adds inside it, but NOT to
+    arbitrary siblings of /kaggle/working. So on Kaggle outputs must live INSIDE
+    the cloned repo (os.getcwd() after the clone cell) to be captured for resume
+    / groupmate handoff. Locally we keep the plain relative path."""
     if on_kaggle():
-        return os.path.join("/kaggle/working", os.path.basename(rel_dir))
+        deploy_dir = os.environ.get("CSE428_DEPLOY_DIR") or os.getcwd()
+        return os.path.join(deploy_dir, os.path.basename(rel_dir))
     return rel_dir
 
 
