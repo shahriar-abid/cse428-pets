@@ -23,6 +23,21 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
+def on_kaggle() -> bool:
+    """True when running inside a Kaggle kernel session."""
+    return os.environ.get("KAGGLE_KERNEL_RUN_TYPE") is not None or os.path.isdir("/kaggle")
+
+
+def resolve_output_dir(rel_dir: str) -> str:
+    """Outputs must land inside /kaggle/working for the notebook output
+    bucket to persist them (files written inside a git-cloned repo under
+    /kaggle/working/<repo>/ are NOT captured, breaking checkpoint resume).
+    Returns '/'kaggle/working/outputs' on Kaggle, else the local rel path."""
+    if on_kaggle():
+        return os.path.join("/kaggle/working", os.path.basename(rel_dir))
+    return rel_dir
+
+
 def check_device(device: torch.device) -> torch.device:
     """Fail fast on GPUs PyTorch cannot run kernels on (e.g. Kaggle P100 vs
     a PyTorch build supporting sm_70+), with an actionable message."""
