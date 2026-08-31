@@ -39,7 +39,7 @@ Dataset: `torchvision.datasets.OxfordIIITPet` downloads to `data/` automatically
 ## Kaggle workflow
 
 1. New notebook → **File → Import Notebook** → `notebooks/ce428_pets.ipynb`
-2. Session options: **Internet ON**, **GPU accelerator** (P100 or T4)
+2. Session options: **Internet ON**, **GPU accelerator: T4 x2** (P100 is NOT supported by Kaggle's current PyTorch — the setup cell raises a clear error if selected)
 3. Run — cell 0 clones this repo; everything else comes from the repo
 
 ### Checkpoint chunks (never retrain from scratch)
