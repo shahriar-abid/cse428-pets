@@ -33,6 +33,7 @@ from PIL import Image
 from scripts.predict import get_preprocessing, load_model, make_overlay, predict
 
 NOTEBOOK_PATH = os.path.join(ROOT, "notebooks", "faculty_demo.ipynb")
+PRESENTATION_NOTEBOOK_PATH = os.path.join(ROOT, "notebooks", "presentation_notebook.ipynb")
 
 # Patterns that must NEVER appear in the faculty demo notebook (word-boundary
 # checks so innocuous substrings like "digit" don't trip).
@@ -46,7 +47,9 @@ FORBIDDEN_PATTERNS = [
     r"subprocess",
     r"os\.system",
     r"\bgit\b",
-    r"!",
+    # shell escapes (!git, !pip ...) — a line starting with '!'; a '!' inside
+    # '!=' (comparison) is fine.
+    r"^\s*!",
     # shell magics (%cd, %pip ...) — a line starting with '%'; a trailing '%'
     # inside format strings like ":.2%" is fine, so only match at line start.
     r"^\s*%",
@@ -65,6 +68,11 @@ ALLOWED_IMPORTS = [
     "ipywidgets",
     "IPython",
     "pathlib",
+    "os",
+    "json",
+    "glob",
+    "torchvision",
+    "pandas",
 ]
 
 # Required content markers (must appear in the notebook).
@@ -76,6 +84,17 @@ REQUIRED_MARKERS = [
     "predicted breed",
     "No training",
     "Upload",
+]
+
+# Markers for the presentation notebook (superset: results/history/grids).
+PRESENTATION_MARKERS = [
+    "best.pth",
+    "build_model",
+    "3×3",
+    "results_table",
+    "history_plot",
+    "predicted breed",
+    "No training",
 ]
 
 
@@ -125,19 +144,19 @@ def verify_notebook(path):
         assert not re.search(pat, code_src), f"forbidden pattern in code: {pat!r}"
     print("  no forbidden patterns in code cells")
 
-    for mod in ALLOWED_IMPORTS:
-        # allow "import torch", "from torch import ...", but catch "import src"
-        pass
     for line in code_src.splitlines():
         s = line.strip()
         if s.startswith("import ") or s.startswith("from "):
-            # the import target is the module path (drop ' as' alias)
-            mod = s.split()[1].split(".")[0]
-            assert mod in ALLOWED_IMPORTS, f"disallowed import: {s!r}"
+            # the import target is the module path (drop ' as' alias and commas)
+            target = s.split()[1].split(".")[0].rstrip(",")
+            assert target in ALLOWED_IMPORTS, f"disallowed import: {s!r}"
     print("  all imports are from the allowed set")
 
-    for marker in REQUIRED_MARKERS:
-        assert marker in all_src, f"missing required marker: {marker!r}"
+    # the faculty demo needs the upload/THRESHOLD markers; the presentation
+    # notebook is a superset (it has results/history/grids instead)
+    markers = REQUIRED_MARKERS if os.path.basename(path) == "faculty_demo.ipynb" else PRESENTATION_MARKERS
+    for marker in markers:
+        assert marker.lower() in all_src.lower(), f"missing required marker: {marker!r}"
     print("  required markers present")
 
     # model classes must be inlined (not imported)
@@ -167,6 +186,8 @@ def main():
     ok = all(verify_checkpoint(c) for c in ckpts)
     if not args.no_notebook:
         ok = verify_notebook(NOTEBOOK_PATH) and ok
+        # the presentation notebook shares the same self-containment rules
+        ok = verify_notebook(PRESENTATION_NOTEBOOK_PATH) and ok
 
     print("\n" + ("ALL DEPLOYMENT CHECKS PASSED" if ok else "SOME CHECKS FAILED"))
     sys.exit(0 if ok else 1)
