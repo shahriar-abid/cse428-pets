@@ -225,6 +225,19 @@ for n, r, h, b in [
 ]:
     print(f"{n:>15}: results={'ok' if r else 'MISSING':7} "
           f"history={'ok' if h else 'MISSING':7} best.pth={'ok' if b else 'MISSING'}")
+
+# Global inference settings (used by the prediction grids and the live demo).
+# Taken from the first available checkpoint so the notebook is self-describing.
+_any_best = (UNET_BEST or ATTN_BEST or [None])[0]
+if _any_best:
+    _ck = torch.load(_any_best, map_location="cpu", weights_only=False)
+    IMG_SIZE = int(_ck["cfg"].get("data", {}).get("img_size", 256))
+    CLASSES = list(_ck.get("classes") or [f"class_{i}" for i in range(37)])
+    THRESHOLD = float(_ck["cfg"].get("model", {}).get("seg_threshold", 0.5))
+    print(f"inference settings: img_size={IMG_SIZE}, threshold={THRESHOLD}, "
+          f"classes={len(CLASSES)} (from {os.path.basename(_any_best)})")
+else:
+    IMG_SIZE, THRESHOLD, CLASSES = 256, 0.5, [f"class_{i}" for i in range(37)]
 '''
 
 
@@ -552,7 +565,7 @@ else:
         x = TF.to_tensor(x).unsqueeze(0).to(DEVICE_DEMO)
         with torch.no_grad():
             out = _demo_model(x)
-        _mask = (torch.sigmoid(out["seg_logits"]) > 0.5).float()
+        _mask = (torch.sigmoid(out["seg_logits"]) > THRESHOLD).float()
         _mask = TF.resize(_mask[0, 0].unsqueeze(0).unsqueeze(0), [_img.size[1], _img.size[0]],
                           interpolation=TF.InterpolationMode.NEAREST)[0, 0].cpu().numpy()
         _probs = torch.softmax(out["cls_logits"], dim=1)[0]
