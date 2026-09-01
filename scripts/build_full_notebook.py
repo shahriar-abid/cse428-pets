@@ -187,7 +187,7 @@ def dataset_code() -> str:
 
 
 def models_code() -> str:
-    code = strip_module_source(MODEL_SOURCES, drop_funcs=("build_backbone_classifier",))
+    code = strip_module_source(MODEL_SOURCES, drop_funcs=())
     return code + """
 
 
@@ -608,6 +608,40 @@ else:
 '''
 
 
+BONUS_TRAIN_CODE = '''# Bonus 1 (train mode): train 3 classifier backbones for an equal 10-epoch
+# budget and persist their test metrics to data/bonus/<backbone>/results.json
+# so they survive into present mode.
+if MODE == "train":
+    BONUS_EPOCHS = 10
+    BACKBONES = ["resnet18", "mobilenet_v3_small", "efficientnet_b0"]
+    bonus_rows = []
+    for bb in BACKBONES:
+        print(f"\\n=== training backbone: {bb} ===")
+        clf = build_backbone_classifier(bb, pretrained=True).to(DEVICE)
+        bb_cfg = {
+            "model": {"name": bb, "num_classes": 37},
+            "train": {"lr": LR, "weight_decay": WEIGHT_DECAY, "epochs_total": BONUS_EPOCHS, "label_smoothing": 0.1},
+            "data": {"img_size": IMG_SIZE},
+        }
+        tr = Trainer(clf, loaders, DEVICE, bb_cfg, out_dir=os.path.join(OUT_DIR, "bonus", bb))
+        tr.fit()
+        # report the LAST epoch (best.pth is degenerate for classifier-only models)
+        last_ckpt = os.path.join(OUT_DIR, "bonus", bb, "checkpoints", "last.pth")
+        clf.load_state_dict(torch.load(last_ckpt, map_location="cpu", weights_only=False)["model_state"])
+        _, test_cls = evaluate(clf, loaders["test"], DEVICE)
+        # persist so present mode can show it
+        os.makedirs(os.path.join(DATA_DIR, "bonus", bb), exist_ok=True)
+        json.dump({"test": {"cls": test_cls}}, open(os.path.join(DATA_DIR, "bonus", bb, "results.json"), "w"))
+        bonus_rows.append({"backbone": bb, **test_cls})
+        print(f"    {bb}: test acc {test_cls['acc']:.4f}")
+    bonus_df = pd.DataFrame(bonus_rows).set_index("backbone")
+    display(bonus_df.round(4))
+    print("\\nBest backbone by test accuracy:", bonus_df["acc"].idxmax())
+else:
+    print("present mode - bonus results load from data/bonus/ in the next cell")
+'''
+
+
 FRESH_MACHINE_MD = """## Running this on a fresh machine
 
 ```bash
@@ -653,6 +687,7 @@ def build_notebook() -> dict:
         cell_code(demo_code()),
         cell_code(demo_predict_code()),
         cell_md(bonus_md()),
+        cell_code(BONUS_TRAIN_CODE),
         cell_code(bonus_code()),
         cell_md(FRESH_MACHINE_MD),
     ]
