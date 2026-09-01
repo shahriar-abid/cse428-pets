@@ -527,17 +527,33 @@ import matplotlib.pyplot as plt
 if "_model" not in globals():
     print("run the previous cell first (it loads the model).")
 else:
+    _demo_path = None
     if DEMO_IMG.strip():
         _demo_path = Path(DEMO_IMG).expanduser()
+        if not _demo_path.is_file():
+            print(f"DEMO_IMG file not found: {_demo_path}")
+            _demo_path = None
     elif _HAVE_WIDGETS:
         _up = widgets.FileUpload(accept="image/*", multiple=False, description="Upload image")
         display(_up)
-        _first = list(_up.value.values())[0]
-        _demo_path = Path("./_uploaded.png")
-        _demo_path.write_bytes(bytes(_first["content"] if isinstance(_first, dict) else _first))
+        # ipywidgets FileUpload.value is a tuple of (name, content) since v7,
+        # but older versions used a dict {name: {"content": bytes}}.
+        val = _up.value
+        if isinstance(val, tuple) and len(val) > 0:
+            _name, _content = val[0]
+            _raw = _content
+        elif isinstance(val, dict) and len(val) > 0:
+            _raw = list(val.values())[0].get("content")
+        else:
+            _raw = None
+        if _raw is None:
+            print("No image uploaded yet. Drop an image into the upload button above "
+                  "(or set DEMO_IMG to a path) and re-run this cell.")
+        else:
+            _demo_path = Path("./_uploaded.png")
+            _demo_path.write_bytes(bytes(_raw))
     else:
         print("set DEMO_IMG to an image path (ipywidgets not installed).")
-        _demo_path = None
 
     if _demo_path is not None:
         _img = Image.open(_demo_path).convert("RGB")
