@@ -111,6 +111,83 @@ Each has a classifier head on the encoder bottleneck, trained jointly with
 """
 
 
+THEORY_MD = """## Background
+
+### Binary mask from the trimap
+Each image ships with a **trimap**: `1` = foreground (pet), `2` = background,
+`3` = boundary (unclassified). Per the project guidelines, boundary pixels are
+merged into the foreground, giving a binary mask:
+
+```
+trimap == 2  ->  background (0)
+trimap != 2  ->  foreground (1)   # includes boundary
+```
+
+### U-Net (Ronneberger et al., 2015)
+A fully-convolutional encoder–decoder:
+- **Encoder (contracting path):** repeated blocks of
+  `Conv3x3 → BatchNorm → ReLU (×2)` followed by `2×2 MaxPool`. Each stage halves
+  the spatial size and doubles the channels: `32 → 64 → 128 → 256 → 512`.
+- **Bottleneck:** the deepest feature map (`16×16` at 256 px input).
+- **Decoder (expanding path):** `2×2 transposed conv` (up-samples, halves
+  channels) followed by a **skip connection** — the corresponding encoder
+  feature map is concatenated along the channel axis — then two conv blocks.
+- **Segmentation head:** a `1×1 conv` on the final `32`-channel map produces a
+  single logit per pixel (binary: foreground vs background).
+
+The skip connections preserve fine spatial detail that pooling would otherwise
+lose, which is exactly what pixel-accurate segmentation needs.
+
+### Classifier head (joint training)
+A global-average-pooled **bottleneck** vector (the most abstract, class-discriminative
+features) is fed to a small MLP:
+
+```
+Linear(512 → 128) → BatchNorm → ReLU → Dropout(0.3) → Linear(128 → 37)
+```
+
+The encoder is thus **shared** between segmentation and classification, and both
+heads are trained **together** (see Loss below).
+
+### Attention U-Net (Oktay et al., 2018)
+The same skeleton, but each skip connection is re-weighted by an **additive
+attention gate** before concatenation. Given a gating signal `g` (from the
+coarser decoder feature) and a skip feature `x`:
+
+```
+α = σ( ψ( ReLU( W_g·g + W_x·x ) ) )
+x' = x · α
+```
+
+`α ∈ [0,1]` is a spatial attention map: it suppresses irrelevant background
+regions in the skip features and emphasizes the foreground object, so the
+decoder focuses on the pet.
+
+### Loss
+The two heads are trained jointly with
+
+```
+L = L_seg + λ · L_cls ,   λ = 1.0
+```
+
+- `L_seg = BCE + Dice`, where the soft Dice loss is
+  `1 − 2|P ∩ G| / (|P| + |G|)` (computed on sigmoid probabilities, so it is
+  differentiable), and BCE is the standard binary cross-entropy with logits.
+- `L_cls = CrossEntropy` with **label smoothing 0.1** — it softens the one-hot
+  targets (`0.9` on the true class, `0.1/37` elsewhere), which regularizes the
+  classifier against overconfidence on a small 37-class dataset.
+
+### Metrics (presentation requirements)
+- **mIoU** — mean over classes of `|P ∩ G| / |P ∪ G|` (Intersection over Union).
+- **Dice coefficient** — `2|P ∩ G| / (|P| + |G|)`, the harmonic-style overlap.
+- **Pixel accuracy** — fraction of pixels predicted correctly.
+- **Accuracy / precision / recall / F1** (macro-averaged over the 37 breeds)
+  for the classification head.
+
+All are reported for **train / validation / test**.
+"""
+
+
 CONFIG_MD = """## 0. Configuration
 
 Choose the mode, then run the cell below.
@@ -323,8 +400,143 @@ else:
 '''
 
 
+def exploration_md() -> str:
+    return """## 2. Dataset exploration — 3×3 overlay grid (requirement)
+
+Nine **random** indices from the dataset; each image shown with its
+ground-truth mask overlaid (boundary pixels merged into the foreground).
+"""
+
+
+def exploration_code() -> str:
+    return '''import numpy as np, matplotlib.pyplot as plt
+from PIL import Image
+import os, glob
+
+IMAGES_DIR = os.path.join(DATA_DIR, "oxford-iiit-pet", "images")
+TRIMAPS_DIR = os.path.join(DATA_DIR, "oxford-iiit-pet", "annotations", "trimaps")
+
+def _list_pets():
+    if not os.path.isdir(IMAGES_DIR):
+        return []
+    return sorted(f for f in os.listdir(IMAGES_DIR) if f.lower().endswith(".jpg"))
+
+PET_FILES = _list_pets()
+
+if not PET_FILES:
+    print("No dataset found under data/oxford-iiit-pet/ - copy the Oxford-IIIT Pet "
+          "images + trimaps there to show the required grids.")
+else:
+    rng = np.random.RandomState(42)          # deterministic for the presentation
+    n_show = min(9, len(PET_FILES))          # safe if only a few images are present
+    idxs = rng.choice(len(PET_FILES), size=n_show, replace=False)
+    fig, axes = plt.subplots(3, 3, figsize=(12, 12))
+    for ax, i in zip(axes.ravel(), idxs):
+        stem = PET_FILES[i][:-4]
+        img = Image.open(os.path.join(IMAGES_DIR, PET_FILES[i])).convert("RGB")
+        tri = np.array(Image.open(os.path.join(TRIMAPS_DIR, stem + ".png")))
+        mask = (tri != 2).astype(np.float32)     # boundary -> foreground
+        im = np.asarray(img, dtype=np.float32) / 255.0
+        im[mask > 0] = 0.5 * im[mask > 0] + 0.5 * np.array([1.0, 0.0, 0.0])
+        ax.imshow(np.clip(im, 0, 1))
+        ax.set_title(f"idx {int(i)} | {stem.split('_')[0].replace(chr(39),'')}", fontsize=9)
+        ax.axis("off")
+    for ax in axes.ravel()[n_show:]:
+        ax.axis("off")
+    fig.suptitle("Dataset exploration - 9 random images with mask overlay")
+    plt.tight_layout()
+    plt.show()
+'''
+
+
+def predict_helpers_code() -> str:
+    return '''def load_model_ckpt(best_path):
+    """Load a checkpoint and return (model, img_size, classes, threshold)."""
+    ck = torch.load(best_path, map_location="cpu", weights_only=False)
+    model = build_model(ck["cfg"]).to(DEVICE)
+    model.load_state_dict(ck["model_state"]); model.eval()
+    imgsz = int(ck["cfg"].get("data", {}).get("img_size", 256))
+    classes = list(ck.get("classes") or [f"class_{i}" for i in range(37)])
+    thresh = float(ck["cfg"].get("model", {}).get("seg_threshold", 0.5))
+    return model, imgsz, classes, thresh
+
+def predict_one(model, imgsz, classes, thresh, stem):
+    """Run one dataset image through the model; return (img, gt, pred, breed, conf, iou)."""
+    import torchvision.transforms.functional as TF
+    from PIL import Image
+    img = Image.open(os.path.join(IMAGES_DIR, stem + ".jpg")).convert("RGB")
+    tri = np.array(Image.open(os.path.join(TRIMAPS_DIR, stem + ".png")))
+    gt = (tri != 2).astype(bool)
+    x = TF.resize(img, [imgsz, imgsz], antialias=True)
+    x = TF.to_tensor(x).unsqueeze(0).to(DEVICE)
+    with torch.no_grad():
+        out = model(x)
+        prob = torch.sigmoid(out["seg_logits"])[0, 0].cpu().numpy()
+        pred = prob > thresh
+        probs = torch.softmax(out["cls_logits"], dim=1)[0]
+        conf, lab = probs.max(0)
+        breed = classes[int(lab)]
+    pred = TF.resize(torch.from_numpy(pred.astype(np.float32)).unsqueeze(0).unsqueeze(0),
+                     [img.size[1], img.size[0]],
+                     interpolation=TF.InterpolationMode.NEAREST)[0, 0].numpy() > 0.5
+    inter = (pred & gt).sum(); union = (pred | gt).sum()
+    iou = inter / max(union, 1)
+    return img, gt, pred, breed, float(conf), float(iou)
+
+def plot_prediction_grid(best_path, n=3):
+    """Required format: image | ground truth | model output for n random samples."""
+    if not PET_FILES:
+        print("no dataset - prediction grid skipped")
+        return
+    model, imgsz, classes, thresh = load_model_ckpt(best_path)
+    rng = np.random.RandomState(7)
+    stems = [PET_FILES[i][:-4] for i in rng.choice(len(PET_FILES), min(n, len(PET_FILES)), replace=False)]
+    fig, axes = plt.subplots(len(stems), 3, figsize=(13, 4.2 * len(stems)))
+    for r, stem in enumerate(stems):
+        img, gt, pred, breed, conf, iou = predict_one(model, imgsz, classes, thresh, stem)
+        cols = [(f"{stem.split('_')[0]}", img, None),
+                ("ground truth", img, gt),
+                (f"pred: {breed} {conf:.0%} | IoU {iou:.2f}", img, pred)]
+        for c, (t, im, m) in enumerate(cols):
+            ax = axes[r][c] if len(stems) > 1 else axes[c]
+            arr = np.asarray(im, dtype=np.float32) / 255.0
+            if m is not None:
+                arr = arr.copy(); arr[m] = 0.5 * arr[m] + 0.5 * np.array([1.0, 0.0, 0.0])
+            ax.imshow(np.clip(arr, 0, 1)); ax.set_title(t, fontsize=9); ax.axis("off")
+    fig.suptitle("Predictions - image | ground truth | model output")
+    fig.tight_layout()
+    plt.show()
+'''
+
+
+def unet_predict_md() -> str:
+    return """### U-Net predictions — image | ground truth | model output (requirement)
+"""
+
+
+def unet_predict_code() -> str:
+    return '''if UNET_BEST:
+    plot_prediction_grid(UNET_BEST[0])
+else:
+    print("no U-Net best.pth - prediction grid skipped")
+'''
+
+
+def attn_predict_md() -> str:
+    return """### Attention U-Net predictions — image | ground truth | model output (requirement)
+"""
+
+
+def attn_predict_code() -> str:
+    return '''if ATTN_BEST:
+    plot_prediction_grid(ATTN_BEST[0])
+else:
+    print("no Attention U-Net best.pth - prediction grid skipped")
+'''
+
+
 def train_unet_md() -> str:
-    return """## 2. Train / load U-Net
+    return """## 3. Train / load U-Net
 """
 
 
@@ -354,7 +566,7 @@ UNET_RESULTS, UNET_HISTORY, UNET_BEST = load_results("unet"), load_history("unet
 
 
 def train_attn_md() -> str:
-    return """## 3. Train / load Attention U-Net
+    return """## 4. Train / load Attention U-Net
 """
 
 
@@ -419,7 +631,7 @@ def history_plot(history, title):
 
 
 def present_unet_md() -> str:
-    return """## 4. Results — U-Net
+    return """## 5. Results — U-Net
 """
 
 
@@ -435,7 +647,7 @@ else:
 
 
 def present_attn_md() -> str:
-    return """## 5. Results — Attention U-Net
+    return """## 6. Results — Attention U-Net
 """
 
 
@@ -451,7 +663,7 @@ else:
 
 
 def comparison_md() -> str:
-    return """## 6. Comparison — U-Net vs Attention U-Net
+    return """## 7. Comparison — U-Net vs Attention U-Net
 """
 
 
@@ -478,55 +690,61 @@ print("  mIoU (~0.89), with the classifier head reaching ~0.72 test accuracy.")
 
 
 def demo_md() -> str:
-    return """## 7. Live demonstration — instant prediction (no training)
+    return """## 9. Live demonstration — instant prediction (no training)
 
 Load a saved model and run **one forward pass** on any image (upload or path).
+This section is for the live **presentation** — in `train` mode it is skipped.
 """
 
 
 def demo_code() -> str:
-    return '''from pathlib import Path
-from IPython.display import display
-try:
-    import ipywidgets as widgets
-    _HAVE_WIDGETS = True
-except ImportError:
-    widgets = None; _HAVE_WIDGETS = False
-
-DEMO_MODEL = "attention_unet"     # "unet" | "attention_unet"
-DEMO_IMG = ""                      # path to an image, or leave empty to upload
-
-_best = ATTN_BEST if DEMO_MODEL == "attention_unet" else UNET_BEST
-if not _best:
-    print(f"no best.pth for {DEMO_MODEL} - copy it under data/ to run the demo.")
+    return '''if MODE != "present":
+    print("Live demo is present-only - skipped in train mode.")
 else:
-    _ck = torch.load(_best[0], map_location="cpu", weights_only=False)
-    _model = build_model(_ck["cfg"]).to(DEVICE)
-    _model.load_state_dict(_ck["model_state"]); _model.eval()
-    _IMGSIZE = int(_ck["cfg"].get("data", {}).get("img_size", 256))
-    _CLASSES = list(_ck.get("classes") or [f"class_{i}" for i in range(37)])
-    _THRESH = float(_ck["cfg"].get("model", {}).get("seg_threshold", 0.5))
-    print(f"loaded {DEMO_MODEL} | img_size {_IMGSIZE} | threshold {_THRESH} | {len(_CLASSES)} breeds")
+    from pathlib import Path
+    from IPython.display import display
+    try:
+        import ipywidgets as widgets
+        _HAVE_WIDGETS = True
+    except ImportError:
+        widgets = None; _HAVE_WIDGETS = False
 
-    if DEMO_IMG.strip():
-        _demo_path = Path(DEMO_IMG).expanduser()
-    elif _HAVE_WIDGETS:
-        _up = widgets.FileUpload(accept="image/*", multiple=False, description="Upload image")
-        display(_up)
-        print("Drop your image into the upload button above, then run the next cell.")
+    DEMO_MODEL = "attention_unet"     # "unet" | "attention_unet"
+    DEMO_IMG = ""                      # path to an image, or leave empty to upload
+
+    _best = ATTN_BEST if DEMO_MODEL == "attention_unet" else UNET_BEST
+    if not _best:
+        print(f"no best.pth for {DEMO_MODEL} - copy it under data/ to run the demo.")
     else:
-        print("set DEMO_IMG to an image path (ipywidgets not installed).")
+        _ck = torch.load(_best[0], map_location="cpu", weights_only=False)
+        _model = build_model(_ck["cfg"]).to(DEVICE)
+        _model.load_state_dict(_ck["model_state"]); _model.eval()
+        _IMGSIZE = int(_ck["cfg"].get("data", {}).get("img_size", 256))
+        _CLASSES = list(_ck.get("classes") or [f"class_{i}" for i in range(37)])
+        _THRESH = float(_ck["cfg"].get("model", {}).get("seg_threshold", 0.5))
+        print(f"loaded {DEMO_MODEL} | img_size {_IMGSIZE} | threshold {_THRESH} | {len(_CLASSES)} breeds")
+
+        if DEMO_IMG.strip():
+            _demo_path = Path(DEMO_IMG).expanduser()
+        elif _HAVE_WIDGETS:
+            _up = widgets.FileUpload(accept="image/*", multiple=False, description="Upload image")
+            display(_up)
+            print("Drop your image into the upload button above, then run the next cell.")
+        else:
+            print("set DEMO_IMG to an image path (ipywidgets not installed).")
 '''
 
 
 def demo_predict_code() -> str:
-    return '''import torchvision.transforms.functional as TF
-from PIL import Image
-import matplotlib.pyplot as plt
-
-if "_model" not in globals():
+    return '''if MODE != "present":
+    print("Live demo is present-only - skipped in train mode.")
+elif "_model" not in globals():
     print("run the previous cell first (it loads the model).")
 else:
+    import torchvision.transforms.functional as TF
+    from PIL import Image
+    import matplotlib.pyplot as plt
+
     _demo_path = None
     if DEMO_IMG.strip():
         _demo_path = Path(DEMO_IMG).expanduser()
@@ -585,7 +803,6 @@ def bonus_md() -> str:
 ResNet-18, MobileNetV3-Small and EfficientNet-B0, each trained for 10 epochs on
 the same split. Test metrics below (loads from data/bonus/ if present).
 """
-
 
 def bonus_code() -> str:
     return '''bonus_rows = []
@@ -662,6 +879,7 @@ def build_notebook() -> dict:
         cell_md(CONFIG_MD),
         cell_code(CONFIG_CODE),
         cell_code(setup_code()),
+        cell_md(THEORY_MD),
         cell_md("## Dataset & loaders (train mode) / present-mode loader"),
         cell_code(dataset_code()),
         cell_md("## Model definitions"),
@@ -672,23 +890,30 @@ def build_notebook() -> dict:
         cell_code(train_code()),
         cell_md(train_or_load_md()),
         cell_code(train_or_load_code()),
+        cell_md(exploration_md()),
+        cell_code(exploration_code()),
+        cell_code(predict_helpers_code()),
         cell_md(train_unet_md()),
         cell_code(train_unet_code()),
-        cell_md(train_attn_md()),
-        cell_code(train_attn_code()),
         cell_code(present_helpers_code()),
         cell_md(present_unet_md()),
         cell_code(present_unet_code()),
+        cell_md(unet_predict_md()),
+        cell_code(unet_predict_code()),
+        cell_md(train_attn_md()),
+        cell_code(train_attn_code()),
         cell_md(present_attn_md()),
         cell_code(present_attn_code()),
+        cell_md(attn_predict_md()),
+        cell_code(attn_predict_code()),
         cell_md(comparison_md()),
         cell_code(comparison_code()),
-        cell_md(demo_md()),
-        cell_code(demo_code()),
-        cell_code(demo_predict_code()),
         cell_md(bonus_md()),
         cell_code(BONUS_TRAIN_CODE),
         cell_code(bonus_code()),
+        cell_md(demo_md()),
+        cell_code(demo_code()),
+        cell_code(demo_predict_code()),
         cell_md(FRESH_MACHINE_MD),
     ]
 
