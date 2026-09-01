@@ -230,16 +230,33 @@ In **train** mode, both models are trained and the artifacts are saved under
 
 def train_or_load_code() -> str:
     return '''# Artifact discovery (used in both modes: present loads, train saves then loads)
+# Search order: DATA_DIR next to the notebook, then any Kaggle attached input
+# (Kaggle auto-extracts attached *_artifacts.zip into /kaggle/input/<slug>/).
+def _kaggle_candidates(subpath):
+    if not os.path.isdir("/kaggle/input"):
+        return []
+    return sorted(glob.glob(os.path.join("/kaggle/input", "**", subpath), recursive=True))
+
+def _first(paths):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
+
 def load_results(name):
-    p = os.path.join(DATA_DIR, name, "results.json")
-    return json.load(open(p)) if os.path.exists(p) else None
+    p = _first([os.path.join(DATA_DIR, name, "results.json")] +
+               _kaggle_candidates(os.path.join("**", name, "results.json")))
+    return json.load(open(p)) if p else None
 
 def load_history(name):
-    p = os.path.join(DATA_DIR, name, "history.json")
-    return json.load(open(p)) if os.path.exists(p) else None
+    p = _first([os.path.join(DATA_DIR, name, "history.json")] +
+               _kaggle_candidates(os.path.join("**", name, "history.json")))
+    return json.load(open(p)) if p else None
 
 def find_best(name):
-    return glob.glob(os.path.join(DATA_DIR, name, "checkpoints", "best.pth"))
+    paths = [os.path.join(DATA_DIR, name, "checkpoints", "best.pth")] + \
+            _kaggle_candidates(os.path.join("**", name, "checkpoints", "best.pth"))
+    return [p for p in paths if os.path.exists(p)]
 
 def report_artifacts():
     for n in ("unet", "attention_unet"):
