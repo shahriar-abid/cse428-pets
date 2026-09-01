@@ -79,9 +79,9 @@ def make_overlay(image_path, mask, out_path):
     import numpy as np
     px = overlay.load()
     m = (mask > 0.5)
-    xs, ys = m.nonzero()
-    for yy, xx in zip(ys.tolist(), xs.tolist()):
-        px[xx, yy] = (255, 0, 0, 120)
+    rows, cols = m.nonzero()
+    for y, x in zip(rows.tolist(), cols.tolist()):
+        px[x, y] = (255, 0, 0, 120)
     out = Image.alpha_composite(img, overlay).convert("RGB")
     out.save(out_path)
     return out_path
