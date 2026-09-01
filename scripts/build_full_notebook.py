@@ -229,38 +229,66 @@ In **train** mode, both models are trained and the artifacts are saved under
 
 
 def train_or_load_code() -> str:
-    return '''# Artifact discovery (used in both modes: present loads, train saves then loads)
-# Search order: DATA_DIR next to the notebook, then any Kaggle attached input
-# (Kaggle auto-extracts attached *_artifacts.zip into /kaggle/input/<slug>/).
-def _kaggle_candidates(subpath):
-    if not os.path.isdir("/kaggle/input"):
-        return []
-    return sorted(glob.glob(os.path.join("/kaggle/input", "**", subpath), recursive=True))
-
-def _first(paths):
-    for p in paths:
-        if os.path.exists(p):
-            return p
-    return None
+    return '''# Artifact discovery (used in both modes: present loads, train saves then loads).
+# Search DATA_DIR/<name>/ first, then scan /kaggle/input/** for any best.pth and
+# read the model name from the checkpoint's embedded cfg (the zip only contains
+# results.json / history.json / checkpoints/best.pth at its top level, and
+# Kaggle's auto-extraction folder name varies, so we cannot rely on the path).
+def _discover_models():
+    found = {}
+    # 1) local DATA_DIR layout: DATA_DIR/<name>/{results.json,history.json,checkpoints/best.pth}
+    for name in ("unet", "attention_unet"):
+        best = os.path.join(DATA_DIR, name, "checkpoints", "best.pth")
+        if os.path.exists(best):
+            found[name] = {
+                "best": best,
+                "results": os.path.join(DATA_DIR, name, "results.json"),
+                "history": os.path.join(DATA_DIR, name, "history.json"),
+            }
+    # 2) Kaggle attached inputs: scan every best.pth and read the model name
+    if os.path.isdir("/kaggle/input"):
+        for best in sorted(glob.glob("/kaggle/input/**/best.pth", recursive=True)):
+            try:
+                ck = torch.load(best, map_location="cpu", weights_only=False)
+                mname = ck.get("cfg", {}).get("model", {}).get("name", "unet")
+            except Exception:
+                continue
+            if mname in found:
+                continue
+            parent = os.path.dirname(os.path.dirname(best))  # .../<artifacts>
+            found[mname] = {
+                "best": best,
+                "results": os.path.join(parent, "results.json"),
+                "history": os.path.join(parent, "history.json"),
+            }
+    return found
 
 def load_results(name):
-    p = _first([os.path.join(DATA_DIR, name, "results.json")] +
-               _kaggle_candidates(os.path.join("**", name, "results.json")))
-    return json.load(open(p)) if p else None
+    d = _discover_models().get(name)
+    if not d:
+        return None
+    return json.load(open(d["results"])) if os.path.exists(d["results"]) else None
 
 def load_history(name):
-    p = _first([os.path.join(DATA_DIR, name, "history.json")] +
-               _kaggle_candidates(os.path.join("**", name, "history.json")))
-    return json.load(open(p)) if p else None
+    d = _discover_models().get(name)
+    if not d:
+        return None
+    return json.load(open(d["history"])) if os.path.exists(d["history"]) else None
 
 def find_best(name):
-    paths = [os.path.join(DATA_DIR, name, "checkpoints", "best.pth")] + \
-            _kaggle_candidates(os.path.join("**", name, "checkpoints", "best.pth"))
-    return [p for p in paths if os.path.exists(p)]
+    d = _discover_models().get(name)
+    return [d["best"]] if d and os.path.exists(d["best"]) else []
+
+def refresh_globals():
+    global UNET_RESULTS, UNET_HISTORY, UNET_BEST
+    global ATTN_RESULTS, ATTN_HISTORY, ATTN_BEST
+    UNET_RESULTS, UNET_HISTORY, UNET_BEST = load_results("unet"), load_history("unet"), find_best("unet")
+    ATTN_RESULTS, ATTN_HISTORY, ATTN_BEST = load_results("attention_unet"), load_history("attention_unet"), find_best("attention_unet")
 
 def report_artifacts():
-    for n in ("unet", "attention_unet"):
-        r, h, b = load_results(n), load_history(n), find_best(n)
+    refresh_globals()
+    for n, r, h, b in [("unet", UNET_RESULTS, UNET_HISTORY, UNET_BEST),
+                       ("attention_unet", ATTN_RESULTS, ATTN_HISTORY, ATTN_BEST)]:
         print(f"{n:>15}: results={'ok' if r else 'MISSING':7} "
               f"history={'ok' if h else 'MISSING':7} best.pth={'ok' if b else 'MISSING'}")
 
