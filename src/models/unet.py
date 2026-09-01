@@ -50,7 +50,13 @@ class UNet(nn.Module):
         self.dec1 = DoubleConv(c[0] * 2, c[0])
 
         self.seg_head = nn.Conv2d(c[0], 1, 1)
-        self.cls_head = nn.Linear(c[3] * 2, num_classes)
+        self.cls_head = nn.Sequential(
+            nn.Linear(c[3] * 2, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),
+            nn.Linear(128, num_classes),
+        )
 
     def encode(self, x):
         s1 = self.enc1(x)

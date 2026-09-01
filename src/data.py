@@ -78,7 +78,7 @@ class PetSegDataset(Dataset):
         self.return_trimap = return_trimap
         self.classes = list(self.base.classes)
         self.jitter = ColorJitter(
-            brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05
+            brightness=0.3, contrast=0.3, saturation=0.3, hue=0.06
         )
 
     def label_name(self, idx: int) -> str:
@@ -96,10 +96,7 @@ class PetSegDataset(Dataset):
             interpolation=TF.InterpolationMode.NEAREST,
         )
         if self.augment:
-            if torch.rand(()) < 0.5:
-                img = TF.hflip(img)
-                trimap = TF.hflip(trimap)
-            img = self.jitter(img)
+            img, trimap = self._augment(img, trimap)
         mask = (np.array(trimap, dtype=np.uint8) != 2).astype(np.int64)
         sample = {
             "image": TF.to_tensor(img),
@@ -109,6 +106,40 @@ class PetSegDataset(Dataset):
         if self.return_trimap:
             sample["trimap"] = torch.from_numpy(np.array(trimap, dtype=np.int64))
         return sample
+
+    def _augment(self, img, trimap):
+        """Rotation, random scale, hflip and color jitter applied identically to
+        the image and its trimap so the mask stays aligned with the picture."""
+        interp = TF.InterpolationMode
+        # random rotation (-15..15 deg), pad with background class so corners
+        # stay consistent with the raw trimap convention
+        if torch.rand(()) < 0.5:
+            angle = float(torch.distributions.Uniform(-15.0, 15.0).sample(()))
+            img = TF.rotate(img, angle, interpolation=interp.BILINEAR, fill=0)
+            trimap = TF.rotate(
+                trimap, angle, interpolation=interp.NEAREST, fill=2
+            )
+        # random resized crop: crop a box of 80-100% area, resize back to img_size
+        if torch.rand(()) < 0.5:
+            scale = float(torch.distributions.Uniform(0.8, 1.0).sample(()))
+            box = max(2, int(round(self.img_size * scale)))
+            top = int(torch.rand([]).item() * (self.img_size - box))
+            left = int(torch.rand([]).item() * (self.img_size - box))
+            img = TF.resized_crop(
+                img, top, left, box, box, [self.img_size, self.img_size],
+                interpolation=interp.BILINEAR, antialias=True,
+            )
+            trimap = TF.resized_crop(
+                trimap, top, left, box, box, [self.img_size, self.img_size],
+                interpolation=interp.NEAREST,
+            )
+        # horizontal flip
+        if torch.rand(()) < 0.5:
+            img = TF.hflip(img)
+            trimap = TF.hflip(trimap)
+        # color jitter (image only - the mask has no color)
+        img = self.jitter(img)
+        return img, trimap
 
 
 def get_datasets(

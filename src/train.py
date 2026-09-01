@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 
 from .metrics import evaluate
+from .models import build_model
 
 
 class DiceBCELoss(nn.Module):
@@ -101,7 +102,9 @@ class Trainer:
             self.optim, T_max=self.epochs_total
         )
         self.seg_criterion = DiceBCELoss()
-        self.cls_criterion = nn.CrossEntropyLoss()
+        self.cls_criterion = nn.CrossEntropyLoss(
+            label_smoothing=train_cfg.get("label_smoothing", 0.1)
+        )
 
         self.history = []
         self.start_epoch = 1
@@ -111,9 +114,17 @@ class Trainer:
 
     def _load_resume(self, path):
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
-        self.model.load_state_dict(ckpt["model_state"])
-        self.optim.load_state_dict(ckpt["optim_state"])
-        self.scheduler.load_state_dict(ckpt["scheduler_state"])
+        try:
+            self.model.load_state_dict(ckpt["model_state"])
+            self.optim.load_state_dict(ckpt["optim_state"])
+            self.scheduler.load_state_dict(ckpt["scheduler_state"])
+        except RuntimeError as e:
+            # Architecture may differ (e.g. improved classifier head) between
+            # versions -> keep the optimizer/scheduler but start epochs fresh.
+            print("WARNING: checkpoint architecture mismatch "
+                  f"({type(e).__name__}); will train from epoch 1.")
+            self.model = build_model(self.cfg).to(self.device)
+            return
         self.scheduler.T_max = self.epochs_total
         self.history = ckpt.get("history", [])
         self.start_epoch = ckpt["epoch"] + 1
@@ -221,12 +232,15 @@ class Trainer:
         """Load best checkpoint, evaluate on train/val/test, write results.json."""
         best_path = os.path.join(self.ckpt_dir, "best.pth")
         if os.path.exists(best_path):
-            ckpt = torch.load(best_path, map_location="cpu", weights_only=False)
-            self.model.load_state_dict(ckpt["model_state"])
-            print(
-                f"final report with best checkpoint: epoch {ckpt['epoch']}, "
-                f"val mIoU {ckpt['best_miou']:.4f}"
-            )
+            try:
+                ckpt = torch.load(best_path, map_location="cpu", weights_only=False)
+                self.model.load_state_dict(ckpt["model_state"])
+                print(
+                    f"final report with best checkpoint: epoch {ckpt['epoch']}, "
+                    f"val mIoU {ckpt['best_miou']:.4f}"
+                )
+            except RuntimeError as e:
+                print("WARNING: best.pth architecture mismatch, using current model.", e)
         results = {}
         for name in ("train", "val", "test"):
             seg_m, cls_m = evaluate(self.model, self.loaders[name], self.device)

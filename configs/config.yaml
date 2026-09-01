@@ -16,7 +16,8 @@ model:
 train:
   lr: 3.0e-4
   weight_decay: 1.0e-4
-  epochs_total: 60      # extended between checkpoint chunks, never reset
+  epochs_total: 80      # extended between checkpoint chunks, never reset
+  label_smoothing: 0.1
 
 output:
   dir: outputs          # /kaggle/working/outputs on Kaggle
