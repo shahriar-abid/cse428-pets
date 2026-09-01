@@ -12,6 +12,7 @@ model:
   name: unet            # unet | attention_unet
   base_channels: 32
   lambda_cls: 1.0       # weight of the breed-classification loss
+  seg_threshold: 0.5    # foreground probability threshold at inference
 
 train:
   lr: 3.0e-4

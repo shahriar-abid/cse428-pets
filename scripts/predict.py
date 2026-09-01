@@ -37,7 +37,16 @@ def load_model(ckpt_path, device):
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     classes = ckpt.get("classes") or build_default_classes()
-    return model, classes, cfg
+    return model, classes, cfg, ckpt
+
+
+def get_preprocessing(cfg, img_size=None, threshold=None):
+    """Preprocessing values: checkpoint cfg is the source of truth; explicit
+    CLI arguments only override it. Old checkpoints without these keys fall
+    back to the training defaults (256 / 0.5)."""
+    img_size = img_size or cfg.get("data", {}).get("img_size", 256)
+    threshold = threshold or cfg.get("model", {}).get("seg_threshold", 0.5)
+    return int(img_size), float(threshold)
 
 
 def build_default_classes():
@@ -92,19 +101,28 @@ def main():
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--image", required=True)
     ap.add_argument("--out", default="/tmp/prediction.png")
-    ap.add_argument("--img-size", type=int, default=256)
-    ap.add_argument("--threshold", type=float, default=0.5)
+    ap.add_argument("--img-size", type=int, default=None,
+                    help="override checkpoint img_size (default: from checkpoint)")
+    ap.add_argument("--threshold", type=float, default=None,
+                    help="override segmentation threshold (default: from checkpoint)")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, classes, cfg = load_model(args.checkpoint, device)
+    model, classes, cfg, ckpt = load_model(args.checkpoint, device)
+    img_size, threshold = get_preprocessing(cfg, args.img_size, args.threshold)
     mask, label, conf, _ = predict(
-        model, args.image, device, args.img_size, args.threshold
+        model, args.image, device, img_size, threshold
     )
     name = classes[label] if label < len(classes) else f"class_{label}"
     out = make_overlay(args.image, mask, args.out)
 
+    print(f"checkpoint:   {args.checkpoint}")
     print(f"model:        {cfg.get('model', {}).get('name')}")
+    print(f"img_size:     {img_size}")
+    print(f"threshold:    {threshold}")
+    print(f"classes:      {len(classes)} breeds")
+    if "epoch" in ckpt:
+        print(f"best epoch:   {ckpt['epoch']} (val mIoU {ckpt.get('best_miou', float('nan')):.4f})")
     print(f"predicted:    {name} (id {label})")
     print(f"confidence:   {conf:.2%}")
     print(f"foreground %: {100.0 * mask.mean():.1f}")
