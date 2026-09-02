@@ -12,6 +12,7 @@ Run:
 """
 
 import argparse
+import random
 import sys
 from pathlib import Path
 
@@ -146,11 +147,12 @@ def main():
         for n in available:
             get_model(n, device)  # preload + verify
 
-    # A few example images straight from the dataset (if present).
+    # A handful of example images picked at random each launch (if present).
     examples = []
     img_dir = Path("data/oxford-iiit-pet/images")
     if img_dir.is_dir():
-        examples = sorted(img_dir.glob("*.jpg"))[:6]
+        all_imgs = sorted(img_dir.glob("*.jpg"))
+        examples = random.sample(all_imgs, k=min(6, len(all_imgs)))
 
     with gr.Blocks(title="CSE428 Pet Demo") as demo:
         gr.HTML(
