@@ -108,6 +108,31 @@ def predict_safe(img, model_name: str):
     return predict(img, model_name)
 
 
+# All dataset images (for the example gallery). Empty if the dataset is absent.
+ALL_IMAGES = sorted(Path("data/oxford-iiit-pet/images").glob("*.jpg"))
+
+# The currently displayed example paths (kept in sync by random_gallery).
+CURRENT_EXAMPLES = []
+
+
+def random_gallery():
+    """A fresh random list of image paths, reshuffled on every page load."""
+    global CURRENT_EXAMPLES
+    if not ALL_IMAGES:
+        CURRENT_EXAMPLES = []
+        return []
+    CURRENT_EXAMPLES = [str(p) for p in random.sample(ALL_IMAGES, k=min(6, len(ALL_IMAGES)))]
+    return CURRENT_EXAMPLES
+
+
+def pick_example(evt: gr.SelectData):
+    """Clicking a gallery thumbnail loads it into the image input."""
+    try:
+        return CURRENT_EXAMPLES[int(evt.index)]
+    except (ValueError, TypeError, IndexError):
+        return None
+
+
 CSS = """
 .gradio-container { max-width: 1100px !important; margin: auto !important; }
 #demo-header { text-align: center; margin-bottom: 4px; }
@@ -147,13 +172,6 @@ def main():
         for n in available:
             get_model(n, device)  # preload + verify
 
-    # A handful of example images picked at random each launch (if present).
-    examples = []
-    img_dir = Path("data/oxford-iiit-pet/images")
-    if img_dir.is_dir():
-        all_imgs = sorted(img_dir.glob("*.jpg"))
-        examples = random.sample(all_imgs, k=min(6, len(all_imgs)))
-
     with gr.Blocks(title="CSE428 Pet Demo") as demo:
         gr.HTML(
             "<div id='demo-header'>"
@@ -178,12 +196,17 @@ def main():
                         label="Model",
                     )
                 btn = gr.Button("Segment & Classify", variant="primary")
-                if examples:
-                    gr.Examples(
-                        examples=[str(p) for p in examples],
-                        inputs=inp,
-                        label="Try an example",
-                        cache_examples=False,
+                if ALL_IMAGES:
+                    ex_gal = gr.Gallery(
+                        value=random_gallery(),
+                        label="Random examples — refresh the page to reshuffle",
+                        columns=6,
+                        height=140,
+                        object_fit="cover",
+                    )
+                    ex_gal.select(
+                        pick_example,
+                        outputs=inp,
                     )
             with gr.Column(scale=1):
                 out_overlay = gr.Image(type="numpy", label="Segmentation overlay")
@@ -215,6 +238,9 @@ def main():
                 inputs=[inp, model_sel],
                 outputs=[out_overlay, out_top, out_headline],
             )
+        if ALL_IMAGES:
+            # reshuffle the example gallery on every page load
+            demo.load(random_gallery, outputs=ex_gal)
 
     print(f"ready | device {device} | models: {list(MODELS)}")
     demo.launch(server_port=args.port, share=args.share, theme=gr.themes.Soft(), css=CSS)
