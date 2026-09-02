@@ -144,7 +144,7 @@ def main():
     if img_dir.is_dir():
         examples = sorted(img_dir.glob("*.jpg"))[:6]
 
-    with gr.Blocks(theme=gr.themes.Soft(), css=CSS, title="CSE428 Pet Demo") as demo:
+    with gr.Blocks(title="CSE428 Pet Demo") as demo:
         gr.HTML(
             "<div id='demo-header'>"
             "<h1>🐾 Pet Segmentation &amp; Breed Classification</h1>"
@@ -207,7 +207,7 @@ def main():
             )
 
     print(f"ready | device {device} | models: {list(MODELS)}")
-    demo.launch(server_port=args.port, share=args.share)
+    demo.launch(server_port=args.port, share=args.share, theme=gr.themes.Soft(), css=CSS)
 
 
 if __name__ == "__main__":
