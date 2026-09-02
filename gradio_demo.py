@@ -180,6 +180,15 @@ def main():
                 out_top = gr.Label(num_top_classes=3, label="Top-3 predicted breeds")
                 out_headline = gr.Markdown("_Upload an image to see the predicted breed._")
 
+        gr.HTML(
+            "<div style='text-align:center; margin-top:18px; padding-top:12px; "
+            "border-top:1px solid #e5e7eb; color:#6b7280; font-size:0.85rem; line-height:1.7;'>"
+            "<b style='color:#374151;'>Group Members</b><br>"
+            "Md Al Shahriar Abid (23301613) &nbsp;·&nbsp; Tasnuva Rahman (23301505)<br>"
+            "CSE428 · Section 04 · BRAC University"
+            "</div>"
+        )
+
         btn.click(
             predict,
             inputs=[inp, model_sel],
