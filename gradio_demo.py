@@ -99,6 +99,14 @@ def predict(img, model_name: str):
     return np.clip(arr, 0, 1), top3, f"{top_breed} ({topk.values[0].item():.0%})"
 
 
+def predict_safe(img, model_name: str):
+    """Like predict, but silently clears outputs when the image is removed
+    (e.g. the user clicks the ✕ button on the upload box)."""
+    if img is None:
+        return None, None, "_Upload an image to see the predicted breed._"
+    return predict(img, model_name)
+
+
 CSS = """
 .gradio-container { max-width: 1100px !important; margin: auto !important; }
 #demo-header { text-align: center; margin-bottom: 4px; }
@@ -195,13 +203,13 @@ def main():
             outputs=[out_overlay, out_top, out_headline],
         )
         inp.change(
-            predict,
+            predict_safe,
             inputs=[inp, model_sel],
             outputs=[out_overlay, out_top, out_headline],
         )
         if not single_ckpt:
             model_sel.change(
-                predict,
+                predict_safe,
                 inputs=[inp, model_sel],
                 outputs=[out_overlay, out_top, out_headline],
             )
